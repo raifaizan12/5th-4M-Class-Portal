@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}<footer className="site-credit">Rai Faizan Technology · All rights reserved</footer></body>
+      <body>{children}<footer className="site-credit"> © 2026. All Rights Reserved. | Designed & Developed with ❤️. </footer></body>
     </html>
   );
 }
