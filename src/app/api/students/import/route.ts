@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/apiAuth";
 import { logAudit } from "@/lib/audit";
@@ -21,16 +20,15 @@ export async function POST(req: NextRequest) {
   if (error) return error;
 
   const body = await req.json().catch(() => null);
-  if (!body?.csvText || typeof body.csvText !== "string") {
+  if (!body?.csvText) {
     return NextResponse.json({ error: "Missing csvText" }, { status: 400 });
   }
 
   const rows = parseCsv<CsvRow>(body.csvText);
+
   const successful: string[] = [];
   const duplicates: string[] = [];
   const invalid: { row: number; reason: string }[] = [];
-  const seenIubIds = new Set<string>();
-  const seenRegNumbers = new Set<string>();
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -38,7 +36,7 @@ export async function POST(req: NextRequest) {
     const iubId = (r["IUB ID"] || "").trim();
     const regNumber = (r["Registration Number"] || "").trim();
     const semester = (r.Semester || "").trim();
-    const section = (r.Section || "5th-4M").trim() || "5th-4M";
+    const section = (r.Section || "5th-4M").trim();
     const email = (r.Email || "").trim();
     const phone = (r.Phone || "").trim();
 
@@ -47,30 +45,20 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    // Detect duplicate identifiers inside the CSV before attempting database writes.
-    const normalizedIubId = iubId.toLowerCase();
-    const normalizedRegNumber = regNumber.toLowerCase();
-    if (seenIubIds.has(normalizedIubId) || seenRegNumbers.has(normalizedRegNumber)) {
-      duplicates.push(`${fullName} (${iubId}) — duplicate identifier in CSV`);
+    const existing = await prisma.student.findFirst({
+      where: { OR: [{ iubId }, { regNumber }] },
+    });
+    if (existing) {
+      duplicates.push(`${fullName} (${iubId})`);
       continue;
     }
-    seenIubIds.add(normalizedIubId);
-    seenRegNumbers.add(normalizedRegNumber);
 
     try {
-      const existingStudent = await prisma.student.findFirst({
-        where: { OR: [{ iubId }, { regNumber }] },
-        select: { id: true },
-      });
-      if (existingStudent) {
-        duplicates.push(`${fullName} (${iubId}) — student already exists`);
-        continue;
-      }
-
-      // A login account can exist even if its Student profile was deleted or never linked.
+      // loginId is unique on User, so check it as well as Student.iubId/regNumber.
       const existingUser = await prisma.user.findUnique({ where: { loginId: iubId } });
+
       if (existingUser && (existingUser.role !== "STUDENT" || existingUser.studentId)) {
-        duplicates.push(`${fullName} (${iubId}) — login ID is already assigned to another account`);
+        duplicates.push(`${fullName} (${iubId}) - login ID already belongs to an existing account`);
         continue;
       }
 
@@ -89,10 +77,10 @@ export async function POST(req: NextRequest) {
         });
 
         if (existingUser) {
-          // Reconnect an unlinked STUDENT account without overwriting its password.
+          // Reuse only an unlinked STUDENT account; do not reset its password.
           await tx.user.update({
             where: { id: existingUser.id },
-            data: { studentId: student.id, isActive: true },
+            data: { studentId: student.id },
           });
         } else {
           await tx.user.create({
@@ -106,13 +94,11 @@ export async function POST(req: NextRequest) {
         }
       });
       successful.push(`${fullName} (${iubId})`);
-    } catch (e: unknown) {
-      // Prisma P2002 means a unique field (usually loginId, iubId, or regNumber) collided.
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-        duplicates.push(`${fullName} (${iubId}) — login ID, IUB ID, or registration number already exists`);
+    } catch (e: any) {
+      if (e?.code === "P2002") {
+        duplicates.push(`${fullName} (${iubId}) - login ID or student identifier already exists`);
       } else {
-        const reason = e instanceof Error ? e.message : "unknown database error";
-        invalid.push({ row: i + 2, reason: `Database error: ${reason}` });
+        invalid.push({ row: i + 2, reason: "Database error: " + (e.message || "unknown") });
       }
     }
   }
