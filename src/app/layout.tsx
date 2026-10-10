@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body>{children}<footer className="site-credit"> © 2026. All Rights Reserved. | Designed & Developed with ❤️. </footer></body>
+      <body>{children}<footer className="site-credit"> © 2026. All Rights Reserved. | Designed & Developed by Ismail dev Technologies. </footer></body>
     </html>
   );
 }
